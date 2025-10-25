@@ -27,4 +27,7 @@ public class Card extends IdEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Currency currency = Currency.UZS;
+
+    @Version
+    private Long version;
 }

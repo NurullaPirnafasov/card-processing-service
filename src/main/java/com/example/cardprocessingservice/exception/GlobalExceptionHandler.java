@@ -15,18 +15,40 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(ResourceNotFoundException ex) {
-        return new ResponseEntity<>(new ErrorResponse("not_found", ex.getMessage()), HttpStatus.NOT_FOUND);
+        return new ResponseEntity<>(
+                new ErrorResponse("not_found", ex.getMessage()),
+                HttpStatus.NOT_FOUND);
     }
 
     @ExceptionHandler(LimitExceededException.class)
     public ResponseEntity<ErrorResponse> handleLimitExceeded(LimitExceededException ex) {
-        return new ResponseEntity<>(new ErrorResponse("limit_exceeded", ex.getMessage()), HttpStatus.BAD_REQUEST);
+        return new ResponseEntity<>(
+                new ErrorResponse("limit_exceeded", ex.getMessage()),
+                HttpStatus.BAD_REQUEST);
     }
 
     @ExceptionHandler(BadRequestException.class)
     public ResponseEntity<ErrorResponse> handleBadRequest(BadRequestException ex) {
-        return new ResponseEntity<>(new ErrorResponse("invalid_data", ex.getMessage()), HttpStatus.BAD_REQUEST);
+        return new ResponseEntity<>(
+                new ErrorResponse("invalid_data", ex.getMessage()),
+                HttpStatus.BAD_REQUEST);
     }
+
+    @ExceptionHandler(InsufficientFundsException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientFunds(InsufficientFundsException ex) {
+        return new ResponseEntity<>(
+                new ErrorResponse("insufficient_funds", ex.getMessage()),
+                HttpStatus.BAD_REQUEST
+        );
+    }
+
+    @ExceptionHandler(PreconditionFailedException.class)
+    public ResponseEntity<Object> handlePreconditionFailed(PreconditionFailedException ex) {
+        return new ResponseEntity<>(
+                new ErrorResponse("precondition_failed", ex.getMessage()),
+                HttpStatus.PRECONDITION_FAILED);
+    }
+
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
@@ -57,6 +79,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
-        return new ResponseEntity<>(new ErrorResponse("internal_error", ex.getMessage()), HttpStatus.INTERNAL_SERVER_ERROR);
+        return new ResponseEntity<>(
+                new ErrorResponse("internal_error", ex.getMessage()),
+                HttpStatus.INTERNAL_SERVER_ERROR);
     }
 }
