@@ -33,7 +33,7 @@ public class CardController {
     public ResponseEntity<CardResponse> getCard(@PathVariable String cardId) {
         Card card = cardService.getCardById(cardId);
         CardResponse response = cardMapper.toResponse(card);
-        String eTag = "\"" + card.getVersion() + "\"";
+        String eTag = card.getVersion().toString();
         return ResponseEntity.ok()
                 .eTag(eTag)
                 .body(response);

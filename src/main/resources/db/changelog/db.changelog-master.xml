@@ -127,4 +127,14 @@
         </sql>
     </changeSet>
 
+    <changeSet id="14" author="nurulla">
+        <sql>
+            ALTER TABLE transaction DROP CONSTRAINT transaction_purpose_check;
+            ALTER TABLE transaction
+                ADD CONSTRAINT transaction_purpose_check
+                    CHECK (purpose IN ('P2P', 'PAYMENT', 'TOP_UP'));
+        </sql>
+    </changeSet>
+
+
 </databaseChangeLog>

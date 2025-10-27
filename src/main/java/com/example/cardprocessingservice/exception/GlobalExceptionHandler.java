@@ -42,6 +42,14 @@ public class GlobalExceptionHandler {
         );
     }
 
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ErrorResponse> handleForbidden(ForbiddenException ex) {
+        return new ResponseEntity<>(
+                new ErrorResponse("forbidden", ex.getMessage()),
+                HttpStatus.FORBIDDEN
+        );
+    }
+
     @ExceptionHandler(PreconditionFailedException.class)
     public ResponseEntity<Object> handlePreconditionFailed(PreconditionFailedException ex) {
         return new ResponseEntity<>(

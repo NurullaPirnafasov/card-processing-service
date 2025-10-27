@@ -12,8 +12,12 @@ import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.data.domain.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -30,29 +34,28 @@ public class CardService {
     private final TransactionRepository transactionRepository;
     private final CardMapper cardMapper;
     private final TransactionMapper transactionMapper;
-    private final CurrencyService currencyService; // external API uchun
+    private final CurrencyService currencyService;
 
     @Transactional
     public CardResponse createCard(CardCreateRequest request, String idempotencyKeyValue) {
-        log.info("Creating new card for userId={} with idempotencyKey={}", request.getUser_id(), idempotencyKeyValue);
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        log.info("Creating new card for username={} with idempotencyKey={}", username, idempotencyKeyValue);
 
         Optional<IdempotencyKey> existingKey = idempotencyKeyRepository.findByKey(idempotencyKeyValue);
         if (existingKey.isPresent()) {
             log.info("Idempotency key {} already exists, returning existing card", idempotencyKeyValue);
             String cardId = existingKey.get().getResponseData();
             Card card = cardRepository.findById(cardId)
-                    .orElseThrow(() -> {
-                        log.error("Card not found for existing idempotency key {}", idempotencyKeyValue);
-                        return new ResourceNotFoundException("Card not found for idempotency key");
-                    });
+                    .orElseThrow(() -> new ResourceNotFoundException("Card not found for idempotency key"));
             return cardMapper.toResponse(card);
         }
 
-        AuthUser user = authUserRepository.findById(request.getUser_id())
-                .orElseThrow(() -> {
-                    log.error("User not found with id={}", request.getUser_id());
-                    return new ResourceNotFoundException("User not found");
-                });
+        AuthUser user = authUserRepository.findByUsername(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with username: " + username));
+
+        if (!user.getId().equals(request.getUser_id())) {
+            throw new ForbiddenException("Access denied");
+        }
 
         List<Card> activeCards = cardRepository.findByAuthUserAndStatusNot(user, CardStatus.CLOSED);
         if (activeCards.size() >= 3) {
@@ -77,16 +80,38 @@ public class CardService {
 
     public Card getCardById(String cardId) {
         log.info("Fetching card by id={}", cardId);
-        return cardRepository.findById(cardId)
+
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        log.info("Request made by user={}", username);
+
+        AuthUser user = authUserRepository.findByUsername(username)
+                .orElseThrow(() -> {
+                    log.error("User not found for username={}", username);
+                    return new ResourceNotFoundException("User not found");
+                });
+
+        Card card = cardRepository.findById(cardId)
                 .orElseThrow(() -> {
                     log.error("Card not found for id={}", cardId);
                     return new ResourceNotFoundException("Card with such id not exists in processing");
                 });
+
+        if (!card.getAuthUser().getId().equals(user.getId())) {
+            log.warn("Unauthorized access attempt by user {} to card {}", user.getId(), cardId);
+            throw new ForbiddenException("Access denied: you are not the owner of this card");
+        }
+
+        return card;
     }
 
     @Transactional
     public void blockCard(String cardId, String ifMatch) {
         log.info("Request to block card id={}", cardId);
+
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+
+        AuthUser user = authUserRepository.findByUsername(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         Card card = cardRepository.findById(cardId)
                 .orElseThrow(() -> {
@@ -94,8 +119,12 @@ public class CardService {
                     return new ResourceNotFoundException("Card not found");
                 });
 
-        String currentTag = "\"" + card.getVersion() + "\"";
+        if (!card.getAuthUser().getId().equals(user.getId())) {
+            log.warn("Unauthorized attempt: user {} tried to block card {}", user.getId(), cardId);
+            throw new ForbiddenException("You do not have permission to block this card");
+        }
 
+        String currentTag = card.getVersion().toString();
         if (!currentTag.equals(ifMatch)) {
             log.warn("ETag mismatch for card id={}", cardId);
             throw new PreconditionFailedException("ETag mismatch - the card data has changed since last read");
@@ -111,8 +140,14 @@ public class CardService {
         log.info("Card {} successfully blocked", cardId);
     }
 
+
+    @Transactional
     public void unblockCard(String cardId, String ifMatch) {
         log.info("Request to unblock card id={}", cardId);
+
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        AuthUser user = authUserRepository.findByUsername(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         Card card = cardRepository.findById(cardId)
                 .orElseThrow(() -> {
@@ -120,8 +155,12 @@ public class CardService {
                     return new ResourceNotFoundException("Card not found");
                 });
 
-        String currentTag = "\"" + card.getVersion() + "\"";
+        if (!card.getAuthUser().getId().equals(user.getId())) {
+            log.warn("User {} tried to unblock card owned by {}", user.getId(), card.getAuthUser().getId());
+            throw new ForbiddenException("You do not have permission to unblock this card");
+        }
 
+        String currentTag = card.getVersion().toString();
         if (!currentTag.equals(ifMatch)) {
             log.warn("ETag mismatch for card id={}", cardId);
             throw new PreconditionFailedException("ETag mismatch - the card data has changed since last read");
@@ -141,6 +180,10 @@ public class CardService {
     public TransactionResponseDebit withdrawFunds(String cardId, CardDebitRequest request, String idempotencyKey) {
         log.info("Withdraw request for cardId={} amount={} {}", cardId, request.getAmount(), request.getCurrency());
 
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        AuthUser currentUser = authUserRepository.findByUsername(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not authorized"));
+
         Optional<IdempotencyKey> existingKey = idempotencyKeyRepository.findByKey(idempotencyKey);
         if (existingKey.isPresent()) {
             log.info("Idempotency key {} already exists, returning existing transaction", idempotencyKey);
@@ -155,6 +198,11 @@ public class CardService {
                     log.error("Card not found for id={}", cardId);
                     return new ResourceNotFoundException("Card not found");
                 });
+
+        if (!card.getAuthUser().getId().equals(currentUser.getId())) {
+            log.warn("User {} attempted to withdraw from another user's card {}", currentUser.getId(), card.getId());
+            throw new ForbiddenException("Access denied to this card");
+        }
 
         if (card.getStatus() != CardStatus.ACTIVE) {
             log.warn("Card id={} is not active, cannot withdraw", cardId);
@@ -213,6 +261,14 @@ public class CardService {
     public TransactionResponseCredit topUpFunds(String cardId, CardCreditRequest request, String idempotencyKey) {
         log.info("Top-up request for cardId={} amount={} {}", cardId, request.getAmount(), request.getCurrency());
 
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String username = (authentication != null) ? authentication.getName() : null;
+
+        if (username == null) {
+            log.warn("Unauthorized top-up attempt: no authentication found");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unauthorized");
+        }
+
         Optional<IdempotencyKey> existingKey = idempotencyKeyRepository.findByKey(idempotencyKey);
         if (existingKey.isPresent()) {
             log.info("Idempotency key {} already exists, returning existing transaction", idempotencyKey);
@@ -228,14 +284,19 @@ public class CardService {
                     return new ResourceNotFoundException("Card not found");
                 });
 
+        if (!card.getAuthUser().getUsername().equals(username)) {
+            log.warn("User {} tried to top-up card {} owned by {}", username, cardId, card.getAuthUser().getUsername());
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You do not have permission to top-up this card");
+        }
+
         if (card.getStatus() != CardStatus.ACTIVE) {
             log.warn("Card id={} is not active, cannot top-up", cardId);
             throw new BadRequestException("Only ACTIVE cards can be credited");
         }
 
         if (request.getExternal_id() == null) {
-            log.error("Top-up request missing external_id");
-            throw new BadRequestException("Missing required field(s)");
+            log.error("Top-up request missing required fields: external_id");
+            throw new BadRequestException("Missing required field(s): external_id, amount");
         }
 
         BigDecimal exchangeRate = BigDecimal.ONE;
@@ -254,7 +315,6 @@ public class CardService {
 
         card.setBalance(card.getBalance().add(amountToCredit));
         cardRepository.save(card);
-        log.info("Top-up successful for cardId={} newBalance={}", cardId, card.getBalance());
 
         Transaction tx = new Transaction();
         tx.setCard(card);
@@ -274,6 +334,8 @@ public class CardService {
         key.setResponseData(savedTx.getId());
         idempotencyKeyRepository.save(key);
 
+        log.info("Top-up successful for cardId={} by user={} transactionId={}", cardId, username, savedTx.getId());
+
         return transactionMapper.toResponseCredit(savedTx);
     }
 
@@ -292,6 +354,11 @@ public class CardService {
                     log.error("Card not found for id={}", cardId);
                     return new ResourceNotFoundException("Card not found");
                 });
+
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        if (!card.getAuthUser().getUsername().equals(username)) {
+            throw new ForbiddenException("You cannot access this card’s transactions");
+        }
 
         Pageable pageable = PageRequest.of(page, size);
 
